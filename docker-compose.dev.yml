@@ -1,0 +1,30 @@
+services:
+  app-dev:
+    # ใช้ image จาก Dockerfile แต่ build ถึงแค่ stage 'build' (มี Maven + โค้ด) สำหรับงานพัฒนา
+    build:
+      context: .
+      target: build
+    container_name: springboot-app-dev-instance
+    ports:
+      - "8082:8080" # dev port mapping (host:container)
+    volumes:
+      # เชื่อมโค้ดแบบ Real-time เพื่อให้แก้แล้ว recompile/restart ได้
+      - ./src:/app/src
+      - ./pom.xml:/app/pom.xml
+      # cache local maven repo ให้ build เร็วขึ้น
+      - maven-repo:/root/.m2
+    environment:
+      SPRING_PROFILES_ACTIVE: dev
+      MAVEN_OPTS: -Dmaven.repo.local=/root/.m2/repository
+      # ให้ DevTools เฝ้าดูโฟลเดอร์ซอร์สโดยตรง เพื่อ restart เมื่อไฟล์เปลี่ยน
+      SPRING_DEVTOOLS_RESTART_ADDITIONAL_PATHS: /app/src/main/java,/app/src/main/resources
+    # รัน spring-boot:run พร้อมตัวเฝ้าไฟล์ที่คอมไพล์ใหม่อัตโนมัติเมื่อแก้ไขโค้ด (ต้องติดตั้ง inotify-tools)
+    command: >-
+      sh -c "
+      apt-get update && apt-get install -y inotify-tools && \
+      ( while inotifywait -r -e modify,create,delete src/main/java src/main/resources; do mvn -q -DskipTests=true compile; done ) & \
+      mvn -B -ntp -Dspring-boot.run.addResources -Dspring-boot.run.profiles=dev spring-boot:run
+      "
+
+volumes:
+  maven-repo:
