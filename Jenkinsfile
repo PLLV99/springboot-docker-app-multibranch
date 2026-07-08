@@ -71,13 +71,19 @@ def deployAndVerify(String containerName, String hostPort, String image) {
         docker run -d --name ${containerName} -p ${hostPort}:8080 ${image}
 
         # --- Smoke test: poll the health endpoint until the app is ready ---
-        # Spring Boot takes several seconds to boot; checking immediately
-        # would hit "connection refused".
-        # Poll every 2s, up to 30 times = 60-second timeout.
+        # IMPORTANT: this Jenkins runs INSIDE a Docker container, so
+        # "localhost" here is the Jenkins container itself — NOT the host
+        # where port ${hostPort} is published. We therefore resolve the app
+        # container's own IP on the Docker bridge network and hit its
+        # internal port 8080 directly (container-to-container traffic).
+        # Spring Boot takes several seconds to boot; poll every 2s,
+        # up to 30 times = 60-second timeout.
         echo "Waiting for app to be ready..."
+        APP_IP=\$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' ${containerName})
+        echo "Health-checking http://\$APP_IP:8080/actuator/health"
         READY=false
         for i in \$(seq 1 30); do
-            if curl -sf http://localhost:${hostPort}/actuator/health > /dev/null; then
+            if curl -sf http://\$APP_IP:8080/actuator/health > /dev/null; then
                 READY=true
                 break
             fi
@@ -86,7 +92,7 @@ def deployAndVerify(String containerName, String hostPort, String image) {
 
         if [ "\$READY" = "true" ]; then
             echo "App is UP!"
-            curl -s http://localhost:${hostPort}/actuator/health
+            curl -s http://\$APP_IP:8080/actuator/health
         else
             # App didn't come up within 60s → dump container logs for debugging,
             # then fail the pipeline (exit 1), which triggers post { failure }.
