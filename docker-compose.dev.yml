@@ -1,29 +1,51 @@
+# =================================================================
+# Local development environment (hot-reload)
+#
+# Usage:  docker compose -f docker-compose.dev.yml up
+#
+# How it works:
+#   - Builds ONLY the `build` stage of the Dockerfile (Maven + JDK
+#     + inotify-tools already baked in)
+#   - Mounts ./src and ./pom.xml so edits on the host are seen
+#     instantly inside the container
+#   - An inotify watcher recompiles on file change; Spring Boot
+#     DevTools detects the new classes and restarts the app
+#
+# Port map on this machine:
+#   8080 = PROD  (deployed by Jenkins)
+#   8081 = DEV   (deployed by Jenkins)
+#   8082 = local dev (this file) — all three can run simultaneously
+# =================================================================
+
 services:
   app-dev:
-    # ใช้ image จาก Dockerfile แต่ build ถึงแค่ stage 'build' (มี Maven + โค้ด) สำหรับงานพัฒนา
     build:
       context: .
+      # Stop at stage 1 of the Dockerfile — we want the Maven toolbox,
+      # not the slim runtime image.
       target: build
     container_name: springboot-app-dev-instance
     ports:
-      - "8082:8080" # dev port mapping (host:container)
+      - "8082:8080"   # host:container
     volumes:
-      # เชื่อมโค้ดแบบ Real-time เพื่อให้แก้แล้ว recompile/restart ได้
+      # Live-mount source so host edits appear inside the container
       - ./src:/app/src
       - ./pom.xml:/app/pom.xml
-      # cache local maven repo ให้ build เร็วขึ้น
+      # Named volume caches the local Maven repo (~/.m2) between runs,
+      # so dependencies aren't re-downloaded every `compose up`
       - maven-repo:/root/.m2
     environment:
       SPRING_PROFILES_ACTIVE: dev
-      MAVEN_OPTS: -Dmaven.repo.local=/root/.m2/repository
-      # ให้ DevTools เฝ้าดูโฟลเดอร์ซอร์สโดยตรง เพื่อ restart เมื่อไฟล์เปลี่ยน
-      SPRING_DEVTOOLS_RESTART_ADDITIONAL_PATHS: /app/src/main/java,/app/src/main/resources
-    # รัน spring-boot:run พร้อมตัวเฝ้าไฟล์ที่คอมไพล์ใหม่อัตโนมัติเมื่อแก้ไขโค้ด (ต้องติดตั้ง inotify-tools)
+    # Hot-reload loop:
+    #   background: watch src/ → recompile on any change
+    #   foreground: run the app via spring-boot:run
+    # DevTools (already a project dependency) watches the compiled
+    # classpath and restarts automatically when classes change —
+    # no extra DevTools config needed.
     command: >-
       sh -c "
-      apt-get update && apt-get install -y inotify-tools && \
       ( while inotifywait -r -e modify,create,delete src/main/java src/main/resources; do mvn -q -DskipTests=true compile; done ) & \
-      mvn -B -ntp -Dspring-boot.run.addResources -Dspring-boot.run.profiles=dev spring-boot:run
+      mvn -B -ntp -Dspring-boot.run.profiles=dev spring-boot:run
       "
 
 volumes:
