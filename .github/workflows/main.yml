@@ -1,0 +1,383 @@
+# GitHub Actions Workflow for CI/CD
+name: CI/CD - Spring Boot Docker App
+
+# Trigger Events
+on:
+  # Trigger automatically on push to develop or main branches
+  push:
+    branches:
+      - develop
+      - main
+  
+  # Trigger automatically on pull requests to develop or main branches
+  pull_request:
+    branches:
+      - develop
+      - main
+  
+  # Manual trigger (Workflow Dispatch) with input parameters
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'Select desired Action'
+        required: true
+        type: choice
+        options:
+          - 'Build & Deploy'
+          - 'Rollback'
+        default: 'Build & Deploy'
+      rollback_tag:
+        description: 'For Rollback: Enter required Image Tag (e.g., Git Hash or dev-123)'
+        required: false
+        type: string
+      rollback_target:
+        description: 'For Rollback: Select target environment'
+        required: false
+        type: choice
+        options:
+          - 'dev'
+          - 'prod'
+        default: 'dev'
+      project_dir_override:
+        description: 'Optional: Specify project folder containing pom.xml (leave blank for auto-discovery)'
+        required: false
+        type: string
+
+# Global Environment Variables
+env:
+  DOCKER_REPO: sakamotolv99/springboot-docker-app
+  DEV_APP_NAME: springboot-app-dev
+  DEV_HOST_PORT: 8081
+  PROD_APP_NAME: springboot-app-prod
+  PROD_HOST_PORT: 8080
+
+jobs:
+  # =================================================================
+  # JOB 1: BUILD & TEST
+  # =================================================================
+  build-and-test:
+    name: Build & Test
+    runs-on: ubuntu-latest
+    # Run only if action is 'Build & Deploy' or triggered by push/pull_request
+    if: github.event.inputs.action != 'Rollback'
+    
+    outputs:
+      image_tag: ${{ steps.set-tag.outputs.tag }}
+      project_dir: ${{ steps.find-project.outputs.dir }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Find project directory
+        id: find-project
+        run: |
+          if [ -n "${{ github.event.inputs.project_dir_override }}" ]; then
+            PROJECT_DIR="${{ github.event.inputs.project_dir_override }}"
+          else
+            # Auto-discover pom.xml
+            POM_FILE=$(find . -name "pom.xml" -type f | head -1)
+            if [ -z "$POM_FILE" ]; then
+              echo "Error: pom.xml not found in workspace"
+              exit 1
+            fi
+            PROJECT_DIR=$(dirname "$POM_FILE")
+            # If pom.xml is at root, use current directory
+            if [ "$PROJECT_DIR" = "." ]; then
+              PROJECT_DIR="."
+            fi
+          fi
+          echo "dir=$PROJECT_DIR" >> $GITHUB_OUTPUT
+          echo "Project directory: $PROJECT_DIR"
+      
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: 'maven'
+      
+      - name: Run Maven Test & Package
+        working-directory: ${{ steps.find-project.outputs.dir }}
+        run: |
+          echo "Running Maven Test & Package..."
+          mvn -B -ntp clean package
+      
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: ${{ steps.find-project.outputs.dir }}/target/surefire-reports/*.xml
+          retention-days: 30
+      
+      - name: Upload JAR artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: spring-boot-jar
+          path: ${{ steps.find-project.outputs.dir }}/target/*.jar
+          retention-days: 30
+      
+      - name: Set image tag
+        id: set-tag
+        run: |
+          if [ "${{ github.ref_name }}" == "main" ]; then
+            TAG=$(git rev-parse --short HEAD)
+          else
+            TAG="dev-${{ github.run_number }}"
+          fi
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "Image tag will be: $TAG"
+  
+  # =================================================================
+  # JOB 2: BUILD & PUSH DOCKER IMAGE
+  # =================================================================
+  build-and-push-docker:
+    name: Build & Push Docker Image
+    runs-on: ubuntu-latest
+    needs: build-and-test
+    if: github.event.inputs.action != 'Rollback'
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Download JAR artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: spring-boot-jar
+          path: ${{ needs.build-and-test.outputs.project_dir }}/target/
+      
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ needs.build-and-test.outputs.project_dir }}
+          push: true
+          tags: |
+            ${{ env.DOCKER_REPO }}:${{ needs.build-and-test.outputs.image_tag }}
+            ${{ github.ref_name == 'main' && format('{0}:latest', env.DOCKER_REPO) || '' }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      
+      - name: Image digest
+        run: echo "Image pushed with tag ${{ needs.build-and-test.outputs.image_tag }}"
+  
+  # =================================================================
+  # JOB 3: DEPLOY TO DEV (Triggered on develop branch)
+  # =================================================================
+  deploy-dev:
+    name: Deploy to DEV
+    runs-on: ubuntu-latest
+    needs: [build-and-test, build-and-push-docker]
+    if: github.ref_name == 'develop' && github.event.inputs.action != 'Rollback'
+    environment:
+      name: development
+      url: http://localhost:${{ env.DEV_HOST_PORT }}
+    
+    steps:
+      # Note: For real deployments, use SSH or Self-hosted runner
+      - name: Deploy to DEV environment
+        run: |
+          echo "Deploying to DEV environment..."
+          echo "Image: ${{ env.DOCKER_REPO }}:${{ needs.build-and-test.outputs.image_tag }}"
+          echo "Container: ${{ env.DEV_APP_NAME }}"
+          echo "Port: ${{ env.DEV_HOST_PORT }}"
+          
+          # Deployment commands placeholder (requires self-hosted runner or SSH)
+          # docker pull ${{ env.DOCKER_REPO }}:${{ needs.build-and-test.outputs.image_tag }}
+          # docker stop ${{ env.DEV_APP_NAME }} || true
+          # docker rm ${{ env.DEV_APP_NAME }} || true
+          # docker run -d --name ${{ env.DEV_APP_NAME }} -p ${{ env.DEV_HOST_PORT }}:8080 \
+          #   ${{ env.DOCKER_REPO }}:${{ needs.build-and-test.outputs.image_tag }}
+      
+      - name: Send success notification to n8n
+        if: success()
+        run: |
+          TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          curl -X POST ${{ secrets.N8N_WEBHOOK_URL }} \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"project\": \"${{ github.repository }}\",
+              \"stage\": \"Deploy to DEV\",
+              \"status\": \"success\",
+              \"build\": \"${{ github.run_number }}\",
+              \"image\": \"${{ env.DOCKER_REPO }}:${{ needs.build-and-test.outputs.image_tag }}\",
+              \"container\": \"${{ env.DEV_APP_NAME }}\",
+              \"url\": \"http://localhost:${{ env.DEV_HOST_PORT }}/\",
+              \"timestamp\": \"${TIMESTAMP}\"
+            }" || echo "Failed to send notification"
+  
+  # =================================================================
+  # JOB 4: APPROVAL FOR PRODUCTION
+  # =================================================================
+  approval-prod:
+    name: Approval for Production
+    runs-on: ubuntu-latest
+    needs: [build-and-test, build-and-push-docker]
+    if: github.ref_name == 'main' && github.event.inputs.action != 'Rollback'
+    environment:
+      name: production-approval
+    
+    steps:
+      - name: Wait for approval
+        run: |
+          echo "🔐 Production Deployment Approval Required!"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "Image: ${{ env.DOCKER_REPO }}:${{ needs.build-and-test.outputs.image_tag }}"
+          echo "Build: #${{ github.run_number }}"
+          echo "Commit: ${{ github.sha }}"
+          echo "Author: ${{ github.actor }}"
+          echo "Project: Spring Boot Application"
+          echo "Port: ${{ env.PROD_HOST_PORT }}"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "Waiting for manual approval..."
+  
+  # =================================================================
+  # JOB 5: DEPLOY TO PROD (Triggered on main branch)
+  # =================================================================
+  deploy-prod:
+    name: Deploy to PROD
+    runs-on: ubuntu-latest
+    needs: [build-and-test, build-and-push-docker, approval-prod]
+    if: github.ref_name == 'main' && github.event.inputs.action != 'Rollback'
+    environment:
+      name: production
+      url: http://localhost:${{ env.PROD_HOST_PORT }}
+    
+    steps:
+      - name: Deploy to PROD environment
+        run: |
+          echo "Deploying to PROD environment..."
+          echo "Image: ${{ env.DOCKER_REPO }}:${{ needs.build-and-test.outputs.image_tag }}"
+          echo "Container: ${{ env.PROD_APP_NAME }}"
+          echo "Port: ${{ env.PROD_HOST_PORT }}"
+          
+          # Deployment commands placeholder (requires self-hosted runner or SSH)
+          # docker pull ${{ env.DOCKER_REPO }}:${{ needs.build-and-test.outputs.image_tag }}
+          # docker stop ${{ env.PROD_APP_NAME }} || true
+          # docker rm ${{ env.PROD_APP_NAME }} || true
+          # docker run -d --name ${{ env.PROD_APP_NAME }} -p ${{ env.PROD_HOST_PORT }}:8080 \
+          #   ${{ env.DOCKER_REPO }}:${{ needs.build-and-test.outputs.image_tag }}
+      
+      - name: Send success notification to n8n
+        if: success()
+        run: |
+          TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          curl -X POST ${{ secrets.N8N_WEBHOOK_URL }} \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"project\": \"${{ github.repository }}\",
+              \"stage\": \"Deploy to PROD\",
+              \"status\": \"success\",
+              \"build\": \"${{ github.run_number }}\",
+              \"image\": \"${{ env.DOCKER_REPO }}:${{ needs.build-and-test.outputs.image_tag }}\",
+              \"container\": \"${{ env.PROD_APP_NAME }}\",
+              \"url\": \"http://localhost:${{ env.PROD_HOST_PORT }}/\",
+              \"timestamp\": \"${TIMESTAMP}\"
+            }" || echo "Failed to send notification"
+  
+  # =================================================================
+  # JOB 6: ROLLBACK
+  # =================================================================
+  rollback:
+    name: Execute Rollback
+    runs-on: ubuntu-latest
+    if: github.event.inputs.action == 'Rollback'
+    environment:
+      name: ${{ github.event.inputs.rollback_target == 'prod' && 'production' || 'development' }}
+    
+    steps:
+      - name: Validate rollback inputs
+        run: |
+          if [ -z "${{ github.event.inputs.rollback_tag }}" ]; then
+            echo "Error: ROLLBACK_TAG is required when action is Rollback"
+            exit 1
+          fi
+          echo "Rolling back ${{ github.event.inputs.rollback_target }} to tag: ${{ github.event.inputs.rollback_tag }}"
+      
+      - name: Rollback to previous version
+        run: |
+          TARGET_ENV="${{ github.event.inputs.rollback_target }}"
+          ROLLBACK_TAG="${{ github.event.inputs.rollback_tag }}"
+          
+          if [ "$TARGET_ENV" == "dev" ]; then
+            APP_NAME="${{ env.DEV_APP_NAME }}"
+            HOST_PORT="${{ env.DEV_HOST_PORT }}"
+          else
+            APP_NAME="${{ env.PROD_APP_NAME }}"
+            HOST_PORT="${{ env.PROD_HOST_PORT }}"
+          fi
+          
+          IMAGE_TO_DEPLOY="${{ env.DOCKER_REPO }}:${ROLLBACK_TAG}"
+          
+          echo "Rolling back to: $IMAGE_TO_DEPLOY"
+          echo "Target environment: $TARGET_ENV"
+          echo "Container name: $APP_NAME"
+          echo "Port: $HOST_PORT"
+          
+          # Deployment commands placeholder (requires self-hosted runner or SSH)
+          # docker pull $IMAGE_TO_DEPLOY
+          # docker stop $APP_NAME || true
+          # docker rm $APP_NAME || true
+          # docker run -d --name $APP_NAME -p $HOST_PORT:8080 $IMAGE_TO_DEPLOY
+      
+      - name: Send rollback notification to n8n
+        if: success()
+        run: |
+          TARGET_ENV="${{ github.event.inputs.rollback_target }}"
+          if [ "$TARGET_ENV" == "dev" ]; then
+            APP_NAME="${{ env.DEV_APP_NAME }}"
+            HOST_PORT="${{ env.DEV_HOST_PORT }}"
+          else
+            APP_NAME="${{ env.PROD_APP_NAME }}"
+            HOST_PORT="${{ env.PROD_HOST_PORT }}"
+          fi
+          
+          TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          curl -X POST ${{ secrets.N8N_WEBHOOK_URL }} \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"project\": \"${{ github.repository }}\",
+              \"stage\": \"Rollback ${TARGET_ENV^^}\",
+              \"status\": \"success\",
+              \"build\": \"${{ github.run_number }}\",
+              \"image\": \"${{ env.DOCKER_REPO }}:${{ github.event.inputs.rollback_tag }}\",
+              \"container\": \"${APP_NAME}\",
+              \"url\": \"http://localhost:${HOST_PORT}/\",
+              \"timestamp\": \"${TIMESTAMP}\"
+            }" || echo "Failed to send notification"
+  
+  # =================================================================
+  # JOB 7: NOTIFY ON FAILURE
+  # =================================================================
+  notify-failure:
+    name: Notify on Failure
+    runs-on: ubuntu-latest
+    needs: [build-and-test, build-and-push-docker, deploy-dev, deploy-prod, rollback]
+    if: failure()
+    
+    steps:
+      - name: Send failure notification to n8n
+        run: |
+          TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          curl -X POST ${{ secrets.N8N_WEBHOOK_URL }} \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"project\": \"${{ github.repository }}\",
+              \"stage\": \"Pipeline Failed\",
+              \"status\": \"failed\",
+              \"build\": \"${{ github.run_number }}\",
+              \"image\": \"N/A\",
+              \"container\": \"N/A\",
+              \"url\": \"N/A\",
+              \"timestamp\": \"${TIMESTAMP}\"
+            }" || echo "Failed to send notification"
