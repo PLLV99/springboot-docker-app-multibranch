@@ -1,11 +1,17 @@
 package com.example.demo.controller;
 
-import org.springframework.web.bind.annotation.*;
-import org.springframework.http.ResponseEntity;
-import java.util.HashMap;
-import java.util.Map;
-import java.util.List;
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
 
 @RestController
 @RequestMapping("/api")
@@ -49,7 +55,7 @@ public class HelloController {
     public ResponseEntity<Map<String, String>> info() {
         Map<String, String> response = new HashMap<>();
         response.put("app", "Spring Boot Demo Application");
-        response.put("version", "2.0.0");
+        response.put("version", "3.0.0");
         response.put("description", "A simple Spring Boot application with Docker support.");
         return ResponseEntity.ok(response);
     }
