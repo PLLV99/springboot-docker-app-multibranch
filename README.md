@@ -130,7 +130,7 @@ curl http://localhost:8080/api/hello
 
 ```bash
 # Build multi-stage image with tag
-docker build -t iamsamitdev/springboot-docker-app:latest .
+docker build -t sakamotolv99/springboot-docker-app:latest .
 
 # Run container in background
 docker run -d -p 8080:8080 --name springboot-app springboot-docker-app
@@ -148,7 +148,7 @@ docker stop springboot-app
 docker rm springboot-app
 
 # Push to Docker Hub
-docker push iamsamitdev/springboot-docker-app:latest
+docker push sakamotolv99/springboot-docker-app:latest
 ```
 
 ## 🧪 Testing
@@ -673,7 +673,7 @@ ENTRYPOINT ["java", "-jar", "app.jar"]
 |----------|-------------|---------|
 | `DOCKERHUB_CREDENTIALS` | Docker Hub login credentials | `dockerhub-credentials` |
 | `N8N_WEBHOOK_URL_CREDENTIALS` | N8N webhook URL | `n8n-webhook-url` |
-| `DOCKER_IMAGE_NAME` | Docker image name | `iamsamitdev/springboot-docker-app` |
+| `DOCKER_IMAGE_NAME` | Docker image name | `sakamotolv99/springboot-docker-app` |
 | `DOCKER_IMAGE_TAG` | Image tag | `${BUILD_NUMBER}` |
 
 ### Spring Boot Environment
@@ -764,8 +764,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 **📞 Contact Information:**
 
-- **Developer**: Samit
-- **Docker Hub**: [iamsamitdev](https://hub.docker.com/u/iamsamitdev)
+- **Credits**: Based on the DevOps Training Workshop by Samit ([iamsamitdev](https://github.com/iamsamitdev)). Pipeline set up and run by PLLV99.
 - **Project**: Spring Boot Docker App Training Workshop
 
 **🔗 Related Projects:**
